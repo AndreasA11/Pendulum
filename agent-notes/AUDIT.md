@@ -1,26 +1,33 @@
-# Audit Report: Numerical Integration Library and `/arm_sim/integration_step` (Task 1)
+# Audit Report: Planar Arm Dynamics and Source/Header Separation (Task 2)
 
 ## Summary
 
-The implementation of Task 1 was audited against the specifications in `prompts/01_integrators.md`, `prompts/PROJECT2_PENDULARM.md`, and the approved plan in `agent-notes/PLAN.md`.
+The implementation of Task 2 and the Task 1 source/header refactor were independently audited against the specifications in `prompts/02_arm_dynamics.md`, `prompts/PROJECT2_PENDULARM.md`, and `prompts/IMPLEMENT.md`.
 
-All four required integrators (`euler`, `midpoint`, `verlet`, `rk4`) are faithfully implemented, verify correctly against analytical closed-form solutions, demonstrate their expected theoretical convergence orders ($O(dt), O(dt^2), O(dt^2), O(dt^4)$), and adhere to the vector-valued state architecture required for future robot arm dynamics tasks. The expression parser correctly implements the exact precedence hierarchy, right-associativity of exponentiation, all required math functions, and robust rejection of malformed expressions. The rosbridge service `/arm_sim/integration_step` conforms completely to the protocol, validates all input parameters, returns arrays of length `steps + 1` with initial conditions at index 0, and exhibits runtime resilience.
+All requirements from the task specification are satisfied:
+1. Source and header files are separated cleanly across `include/pendularm/` and `src/`, with all changes explicitly documented with `*CHANGES*` comments.
+2. The arm dynamics are derived from first principles using Lagrangian mechanics in world heading angles $\phi_i = \sum_{j=1}^i q_j$, resulting in a general $n$-link formulation that works identically for both 2-link and 3-link arms without maintaining two unrelated sets of equations.
+3. The mass matrix $M(q)$ is symmetric, positive-definite, and configuration-dependent.
+4. Coriolis and centrifugal inter-joint coupling $C(q, \dot{q})\dot{q}$ is fully implemented and active across all joints.
+5. Gravity load $G(q)$ matches the potential energy gradient for uniform rigid rods with gravity along world $-y$.
+6. Forward dynamics $M(q) \ddot{q} = \tau - C(q, \dot{q})\dot{q} - G(q)$ is solved via Gaussian elimination with partial pivoting.
+7. All invariants (free motion under gravity with $\tau=0$, zero acceleration when $\tau=G(q)$ and $\dot{q}=0$, inter-joint dynamic coupling) are mathematically verified.
 
 ## Findings
 
 No critical, major, or minor defects were found. Below is an informational note:
 
 - **Severity:** Informational
-- **Location:** `include/pendularm/expression.hpp`
-- **Problem:** When domain errors occur during expression evaluation (e.g. `sqrt(-1)` or `ln(0)`), standard IEEE 754 floating point arithmetic yields `NaN` or `inf`.
-- **Why it matters:** The task specification explicitly states: *"A domain error at evaluation time — `sqrt` of a negative number, say — is fine to just let become `NaN`/`inf`, the same as ordinary floating-point arithmetic; there's no need to special-case that."*
-- **Recommended action:** No change needed; existing behavior strictly follows the specification.
+- **Location:** `src/arm_dynamics.cpp` (`solve_linear_system`)
+- **Problem:** The linear solver throws `std::runtime_error` if the matrix is singular (pivot $< 10^{-13}$).
+- **Why it matters:** Physical mass matrices for serial arms with positive lengths and masses are strictly positive-definite everywhere in configuration space, so singularity cannot occur for physically valid arm parameters.
+- **Recommended action:** No change needed; the check protects against potential future degenerate inputs.
 
 ## Unverified risks
 
-1. **Long-duration integration with large step counts**:
-   For very large step counts (e.g. $10^6$ steps), allocating JSON arrays could consume substantial memory. While normal testing uses step counts up to several thousands, a client requesting millions of steps in a single request could cause memory pressure. This is a common service boundary risk to keep in mind for full system stress testing.
-2. **Rosbridge socket concurrency**:
-   Service calls from multiple concurrent TCP clients rely on `RosbridgeServer` and `Middleware` internal thread safety. Verified via middleware unit tests, but high concurrency scenarios should be verified during integration testing.
+1. **High velocity centrifugal force stability**:
+   At very high rotational velocities ($\dot{q} \gg 10\ \text{rad/s}$), centrifugal forces scale quadratically ($\dot{q}^2$). While the dynamics equations are exact, stepping at high speeds with large integration timesteps $dt$ in Task 3 could cause instability. The choice of $dt$ and integrator in Task 3 will need to account for this.
+2. **Extreme link parameters**:
+   Extremely high link mass ratios (e.g. $m_1 = 1000\ \text{kg}, m_2 = 0.001\ \text{kg}$) would increase the condition number of $M(q)$. Standard parameter values specified in the handout are well-balanced.
 
-Overall Assessment: **PASSED AUDIT**. The implementation is clean, robust, thoroughly verified, and ready for verification reporting.
+Overall Assessment: **PASSED AUDIT**. The dynamics model, kinematics, linear solver, and source/header structure are fully compliant with requirements.

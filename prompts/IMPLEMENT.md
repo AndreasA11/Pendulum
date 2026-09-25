@@ -40,6 +40,7 @@ Work from the repository and persistent artifacts rather than relying on prior c
 - Use C++ for implementations
 - Add comments starting with "*CHANGES*" for any changes made to existing code and state reasons for changes
 - Make the code style readable so a human can edit, change, and check everything easily. 
+- Seperate source and header files if appropriate
 
 
 ## Handling unexpected issues

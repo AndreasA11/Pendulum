@@ -7,6 +7,7 @@
 #include "middleware/middleware.hpp"
 #include "middleware/rosbridge_server.hpp"
 #include "pendularm/integration_service.hpp"
+#include "pendularm/arm_simulation.hpp"
 
 namespace {
 std::atomic<bool> g_shutdown{false};
@@ -38,6 +39,7 @@ int main() {
     // Create middleware and rosbridge TCP server
     middleware::Middleware mw;
     pendularm::register_integration_service(mw);
+    pendularm::ArmSimulation simulation(mw, arm_sim_links);
 
     middleware::RosbridgeServer server(mw, "127.0.0.1", 9095);
     if (!server.start()) {
@@ -47,6 +49,12 @@ int main() {
 
     std::cout << "Rosbridge server listening on 127.0.0.1:9095" << std::endl;
     std::cout << "Registered service: /arm_sim/integration_step" << std::endl;
+    std::cout << "Registered simulation services: /arm_sim/set_integrator, /arm_sim/set_params, /arm_sim/pause, /arm_sim/reset" << std::endl;
+    std::cout << "Registered PID services: /pid_controller/enable, /pid_controller/set_gains" << std::endl;
+    std::cout << "Registered IK service: /ik/solve" << std::endl;
+    std::cout << "Registered IK action services: /ik_action/send_goal, /ik_action/cancel_goal" << std::endl;
+    std::cout << "Registered IK trial services: /ik_trial/start, /ik_trial/skip, /ik_trial/stop" << std::endl;
+    simulation.start();
 
     // Main execution loop until signal received
     while (!g_shutdown.load()) {
@@ -54,6 +62,7 @@ int main() {
     }
 
     std::cout << "Shutting down Pendularm Runtime..." << std::endl;
+    simulation.stop();
     server.stop();
     std::cout << "Shutdown complete." << std::endl;
 
