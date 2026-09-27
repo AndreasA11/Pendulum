@@ -34,20 +34,29 @@ int main() {
         }
     }
 
-    std::cout << "Starting Pendularm Runtime (ARM_SIM_LINKS=" << arm_sim_links << ")..." << std::endl;
+    int port = 9095;
+    const char* env_port = std::getenv("ARM_SIM_PORT");
+    if (env_port != nullptr) {
+        try {
+            int p = std::stoi(env_port);
+            if (p > 1024 && p <= 65535) port = p;
+        } catch (...) {}
+    }
+
+    std::cout << "Starting Pendularm Runtime (ARM_SIM_LINKS=" << arm_sim_links << ", PORT=" << port << ")..." << std::endl;
 
     // Create middleware and rosbridge TCP server
     middleware::Middleware mw;
     pendularm::register_integration_service(mw);
     pendularm::ArmSimulation simulation(mw, arm_sim_links);
 
-    middleware::RosbridgeServer server(mw, "127.0.0.1", 9095);
+    middleware::RosbridgeServer server(mw, "127.0.0.1", port);
     if (!server.start()) {
-        std::cerr << "Failed to start Rosbridge server on 127.0.0.1:9095" << std::endl;
+        std::cerr << "Failed to start Rosbridge server on 127.0.0.1:" << port << std::endl;
         return 1;
     }
 
-    std::cout << "Rosbridge server listening on 127.0.0.1:9095" << std::endl;
+    std::cout << "Rosbridge server listening on 127.0.0.1:" << port << std::endl;
     std::cout << "Registered service: /arm_sim/integration_step" << std::endl;
     std::cout << "Registered simulation services: /arm_sim/set_integrator, /arm_sim/set_params, /arm_sim/pause, /arm_sim/reset" << std::endl;
     std::cout << "Registered PID services: /pid_controller/enable, /pid_controller/set_gains" << std::endl;
