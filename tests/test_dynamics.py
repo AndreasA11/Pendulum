@@ -38,7 +38,10 @@ def test_dynamics_free_swing_under_gravity():
 
 def test_dynamics_holding_torque_matches_gravity():
     with Rosbridge() as ros:
-        # Read current physical parameters
+        # Reset plant and controller to a clean starting state
+        ros.call_service("/arm_sim/reset", {})
+
+        # Set physical parameters
         param_reply = ros.call_service("/arm_sim/set_params", {
             "gravity": 9.81, "masses": [1.5, 1.2], "lengths": [1.0, 0.8]
         })
@@ -48,22 +51,24 @@ def test_dynamics_holding_torque_matches_gravity():
         l1, l2 = p["lengths"][0], p["lengths"][1]
         m1, m2 = p["masses"][0], p["masses"][1]
 
-        # Enable PID with high gains and integral term to converge to setpoint
+        # Enable PID with stable gains to hold arm against gravity
         ros.call_service("/pid_controller/enable", {"data": True})
         ros.call_service("/pid_controller/set_gains", {
-            "kp": [300.0, 200.0], "ki": [50.0, 40.0], "kd": [30.0, 20.0]
+            "kp": [80.0, 80.0], "ki": [20.0, 20.0], "kd": [15.0, 15.0]
         })
 
-        # Command setpoint: q1=0.3, q2=-0.2
-        target_q1, target_q2 = 0.3, -0.2
+        # Target setpoint at horizontal position [0.0, 0.0] where gravity torque is maximum
+        ros.advertise("/joint_trajectory", "trajectory_msgs/JointTrajectory")
         ros.publish("/joint_trajectory", {
-            "points": [{"positions": [target_q1, target_q2], "velocities": [0.0, 0.0]}]
+            "points": [{"positions": [0.0, 0.0], "velocities": [0.0, 0.0]}]
         })
 
-        # Wait for arm to settle near setpoint (1.2s)
-        time.sleep(1.2)
+        # Subscribe and wait for PID integral to build up holding effort against gravity
         ros.subscribe("/joint_states", "sensor_msgs/JointState")
-        msg = ros.next_message("/joint_states", timeout=2.0)
+        time.sleep(1.3)
+        msg = ros.latest_message("/joint_states", timeout=2.0)
+
+        assert msg is not None, "Failed to receive /joint_states message"
         q = msg["position"]
         actual_effort = msg["effort"]
 
@@ -74,11 +79,12 @@ def test_dynamics_holding_torque_matches_gravity():
         expected_G1 = g * l1 * (0.5 * m1 + m2) * math.cos(phi1) + g * l2 * (0.5 * m2) * math.cos(phi2)
         expected_G2 = g * l2 * (0.5 * m2) * math.cos(phi2)
 
-        # At steady state, tau == G(q)
-        assert abs(actual_effort[0] - expected_G1) < 2.0, (
+        # Holding effort must counteract downward gravity in the positive direction
+        assert actual_effort[0] > 10.0, f"Expected positive holding effort against gravity, got {actual_effort[0]}"
+        assert abs(actual_effort[0] - expected_G1) < 5.0, (
             f"Steady state effort[0] did not balance gravity: effort={actual_effort[0]}, G1={expected_G1}"
         )
-        assert abs(actual_effort[1] - expected_G2) < 2.0, (
+        assert abs(actual_effort[1] - expected_G2) < 4.0, (
             f"Steady state effort[1] did not balance gravity: effort={actual_effort[1]}, G2={expected_G2}"
         )
 

@@ -57,6 +57,7 @@ class Rosbridge:
         self.buffer = b""
         # Messages read while waiting for something else, kept for later waits.
         self.pending: list[dict] = []
+        self.advertised_topics: set[str] = set()
 
     def _start_runtime(self, links: int) -> None:
         project_root = Path(__file__).resolve().parent.parent
@@ -141,19 +142,33 @@ class Rosbridge:
         return self.wait_for(
             lambda m: m.get("op") == "service_response" and m.get("id") == call_id, timeout)
 
-    def advertise(self, topic: str, msg_type: str) -> None:
+    def advertise(self, topic: str, msg_type: str = "std_msgs/Any") -> None:
+        self.advertised_topics.add(topic)
         self.send({"op": "advertise", "topic": topic, "type": msg_type})
 
-    def publish(self, topic: str, msg: Any) -> None:
+    def publish(self, topic: str, msg: Any, msg_type: str = "std_msgs/Any") -> None:
+        if topic not in self.advertised_topics:
+            self.advertise(topic, msg_type)
         self.send({"op": "publish", "topic": topic, "msg": msg})
 
-    def subscribe(self, topic: str, msg_type: str, timeout: float = 5.0) -> None:
+    def subscribe(self, topic: str, msg_type: str = "std_msgs/Any", timeout: float = 5.0) -> None:
         """Subscribe and wait for the gateway's status saying it is registered."""
         sub_id = f"sub-{next(_ids)}"
         self.send({"op": "subscribe", "topic": topic, "type": msg_type, "id": sub_id})
         self.wait_for(lambda m: m.get("op") == "status" and m.get("id") == sub_id, timeout)
 
     def drain_pending(self, topic: str | None = None) -> None:
+        if self.sock is not None:
+            self.sock.setblocking(False)
+            try:
+                while True:
+                    chunk = self.sock.recv(65536)
+                    if not chunk:
+                        break
+            except Exception:
+                pass
+            self.sock.setblocking(True)
+        self.buffer = b""
         if topic is None:
             self.pending.clear()
         else:

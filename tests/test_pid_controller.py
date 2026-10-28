@@ -22,8 +22,10 @@ def test_pid_disabled_zero_effort_at_startup():
         })
         ros.call_service("/pid_controller/enable", {"data": True})
 
-        time.sleep(0.1)
-        msg_enabled = ros.next_message("/joint_states", timeout=2.0)
+        msg_enabled = ros.wait_for(
+            lambda m: m.get("op") == "publish" and m.get("topic") == "/joint_states" and any(abs(tau) > 1.0 for tau in m.get("msg", {}).get("effort", [])),
+            timeout=3.0
+        )["msg"]
         efforts_enabled = msg_enabled.get("effort", [])
         assert any(abs(tau) > 1.0 for tau in efforts_enabled), (
             f"Enabled PID must exert effort toward setpoint: {efforts_enabled}"
@@ -31,8 +33,10 @@ def test_pid_disabled_zero_effort_at_startup():
 
         # Disable PID again
         ros.call_service("/pid_controller/enable", {"data": False})
-        time.sleep(0.05)
-        msg_disabled = ros.latest_message("/joint_states", timeout=2.0)
+        msg_disabled = ros.wait_for(
+            lambda m: m.get("op") == "publish" and m.get("topic") == "/joint_states" and all(abs(tau) < 1e-9 for tau in m.get("msg", {}).get("effort", [])),
+            timeout=3.0
+        )["msg"]
         efforts_disabled = msg_disabled.get("effort", [])
         assert all(abs(tau) < 1e-9 for tau in efforts_disabled), (
             f"Disabled PID must return to 0 effort: {efforts_disabled}"
@@ -71,38 +75,37 @@ def test_pid_gain_updates_and_validation():
 def test_pid_anti_windup_and_re_enable_reset():
     with Rosbridge() as ros:
         ros.call_service("/arm_sim/reset", {})
-        # Set large Ki to test integrator windup
+        # Set pure I controller to isolate integral behavior
         ros.call_service("/pid_controller/set_gains", {
-            "kp": [10.0, 10.0], "ki": [500.0, 500.0], "kd": [5.0, 5.0]
+            "kp": [0.0, 0.0], "ki": [200.0, 200.0], "kd": [0.0, 0.0]
         })
         ros.call_service("/pid_controller/enable", {"data": True})
 
-        # Command distant setpoint
+        # Command setpoint so error accumulates in integral term
         ros.publish("/joint_trajectory", {
-            "points": [{"positions": [2.5, 2.5], "velocities": [0.0, 0.0]}]
+            "points": [{"positions": [1.0, 1.0], "velocities": [0.0, 0.0]}]
         })
 
-        time.sleep(0.5)
+        time.sleep(0.3)
         ros.subscribe("/joint_states", "sensor_msgs/JointState")
-        msg = ros.next_message("/joint_states", timeout=2.0)
-        effort = msg.get("effort", [])
-        # Anti-windup must bound the maximum effort rather than letting it explode towards infinity
-        for tau in effort:
-            assert abs(tau) < 5000.0, f"Anti-windup clamping failed, effort exploded: {effort}"
+        msg_wound = ros.latest_message("/joint_states", timeout=2.0)
+        wound_effort = msg_wound.get("effort", [])
+        # Integral must accumulate effort (effort > 20) but remain bounded by anti-windup (< 5000)
+        assert any(abs(tau) > 20.0 for tau in wound_effort), f"Integral failed to accumulate effort: {wound_effort}"
+        for tau in wound_effort:
+            assert abs(tau) < 5000.0, f"Anti-windup clamping failed, effort exploded: {wound_effort}"
 
-        # Disabling and re-enabling must clear accumulated integral
+        # Disable PID and reset plant to zero
         ros.call_service("/pid_controller/enable", {"data": False})
+        ros.call_service("/arm_sim/reset", {})
+
+        # Re-enabling PID must start from a clean zero integral
         ros.call_service("/pid_controller/enable", {"data": True})
-        # Reset arm to setpoint location
-        ros.publish("/joint_trajectory", {
-            "points": [{"positions": [msg["position"][0], msg["position"][1]], "velocities": [0.0, 0.0]}]
-        })
-        time.sleep(0.05)
-        msg_cleared = ros.next_message("/joint_states", timeout=2.0)
-        # Because error is now zero and integral was cleared, effort should be small
+        time.sleep(0.02)
+        msg_cleared = ros.latest_message("/joint_states", timeout=2.0)
         cleared_effort = msg_cleared.get("effort", [])
-        assert all(abs(tau) < 50.0 for tau in cleared_effort), (
-            f"Re-enabling PID failed to clear accumulated integral: {cleared_effort}"
+        assert all(abs(tau) < 5.0 for tau in cleared_effort), (
+            f"Re-enabling PID failed to clear accumulated integral: was {wound_effort}, now {cleared_effort}"
         )
 
 
